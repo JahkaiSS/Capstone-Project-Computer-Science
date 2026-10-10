@@ -1,0 +1,107 @@
+from abc import ABC, abstractmethod
+from collections import deque
+
+from config import BUILDING_TRANSITIONS, GRID_COLUMNS, GRID_ROWS
+from models import Building, Location
+
+
+class IMapTopology(ABC):
+    @abstractmethod
+    def GetNeighbors(self, location):
+        raise NotImplementedError
+
+    @abstractmethod
+    def GetDistance(self, start, end):
+        raise NotImplementedError
+
+    @abstractmethod
+    def IsBlocked(self, location):
+        raise NotImplementedError
+
+
+class WarehouseTopology(IMapTopology):
+    """Grid topology plus explicit connections between buildings.
+
+    The transition coordinates and blocked rack rows are demonstration data;
+    replace them with verified physical aisle/crossing information.
+    """
+
+    def __init__(self):
+        self.rows = GRID_ROWS
+        self.columns = GRID_COLUMNS
+        self.blocked = set()
+        self.locations = {}
+        self.transitions = {}
+        self._create_locations()
+        self._create_blocked_locations()
+        self._create_transitions()
+
+    def _create_locations(self):
+        for building in Building:
+            for row in range(self.rows):
+                for column in range(self.columns):
+                    location = Location(building, row, column)
+                    self.locations[(building, row, column)] = location
+
+    def _create_blocked_locations(self):
+        # Example rack footprints only; replace with surveyed aisle geometry.
+        for column in range(3, 8):
+            self.blocked.add(self.get_location(Building.A, 4, column))
+        for column in range(5, 10):
+            self.blocked.add(self.get_location(Building.B, 6, column))
+
+    def _create_transitions(self):
+        for first, second in BUILDING_TRANSITIONS:
+            a = self.get_location(Building[first[0]], first[1], first[2])
+            b = self.get_location(Building[second[0]], second[1], second[2])
+            self.transitions.setdefault(a, set()).add(b)
+            self.transitions.setdefault(b, set()).add(a)
+
+    def get_location(self, building, row, column):
+        if not isinstance(building, Building):
+            raise ValueError("Building must be a Building.A or Building.B value.")
+        if not (0 <= row < self.rows and 0 <= column < self.columns):
+            raise ValueError(f"Location ({row}, {column}) is outside the warehouse grid.")
+        return self.locations[(building, row, column)]
+
+    def IsBlocked(self, location):
+        return location in self.blocked
+
+    def GetNeighbors(self, location):
+        if location not in self.locations.values() or self.IsBlocked(location):
+            return []
+        neighbors = []
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            row, column = location.row + dr, location.column + dc
+            if 0 <= row < self.rows and 0 <= column < self.columns:
+                neighbor = self.get_location(location.building, row, column)
+                if not self.IsBlocked(neighbor):
+                    neighbors.append(neighbor)
+        neighbors.extend(n for n in self.transitions.get(location, ()) if not self.IsBlocked(n))
+        return neighbors
+
+    def GetDistance(self, start, end):
+        """Return true shortest-path distance, including building transitions."""
+        path = self.FindPath(start, end)
+        return len(path) - 1 if path else float("inf")
+
+    def FindPath(self, start, end):
+        if start not in self.locations.values() or end not in self.locations.values():
+            return None
+        if self.IsBlocked(start) or self.IsBlocked(end):
+            return None
+        queue = deque([start])
+        previous = {start: None}
+        while queue:
+            current = queue.popleft()
+            if current == end:
+                path = []
+                while current is not None:
+                    path.append(current)
+                    current = previous[current]
+                return list(reversed(path))
+            for neighbor in self.GetNeighbors(current):
+                if neighbor not in previous:
+                    previous[neighbor] = current
+                    queue.append(neighbor)
+        return None
